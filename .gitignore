@@ -1,0 +1,11 @@
+# ===== Generated outputs =====
+Results/
+
+# ===== Python cache =====
+__pycache__/
+*.pyc
+
+# ===== Secrets =====
+.env
+Sampledata/Input_SVI_points.csv
+Cross_section_streetview/Cross_section_upper_lower.jpg
