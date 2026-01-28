@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Environments
 .venv/
 venv/
@@ -31,3 +32,16 @@ __pycache__/
 # Editor
 .vscode/
 
+=======
+# ===== Generated outputs =====
+Results/
+
+# ===== Python cache =====
+__pycache__/
+*.pyc
+
+# ===== Secrets =====
+.env
+Sampledata/Input_SVI_points.csv
+Cross_section_streetview/Cross_section_upper_lower.jpg
+>>>>>>> 10804e4e7a822497f9fe2a8a6996f20129fdea38
