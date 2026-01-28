@@ -20,19 +20,21 @@ import requests
 import math
 import os
 
+from pathlib import Path
+from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 
 
 ### ==== CONFIGURATION ==== ###
-ACCESS_TOKEN = "MLY|25078958115060460|63887214bce846039a87cac96f71e44a"
 
-NEIGH_FILE = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Input_data\Frankendael_geom.gpkg"
+ACCESS_TOKEN = MAPILLARY_TOKEN
+
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Frankendael_geom.gpkg"
 NEIGH_LAYER = None
 
-BUILDINGS_FILE = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Input_data\Buildings.gpkg"
+BUILDINGS_FILE = PROJECT_ROOT / "Input_data" / "Buildings.gpkg"
 BUILDINGS_LAYER = None
 
-SAMPLES_OUT = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_csv\road_network\Frankendael_sample_points.csv"
-os.makedirs(os.path.dirname(SAMPLES_OUT), exist_ok=True)
+SAMPLES_OUT = CSV_PATHS / "road_network" / "Frankendael_sample_points.csv"
 
 # CRS
 CRS_WGS84 = "EPSG:4326"    # WSG84 (mapillary crs)

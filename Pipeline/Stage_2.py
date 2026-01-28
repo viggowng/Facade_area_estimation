@@ -10,22 +10,21 @@ import numpy as np
 import cv2
 from PIL import Image
 
-# ============================================================
-# CONFIG 
-# ============================================================
+from Stage_0 import MAPILLARY_TOKEN, CSV_PATHS, IMAGE_PATHS
 
-ACCESS_TOKEN = "MLY|25078958115060460|63887214bce846039a87cac96f71e44a"
+### ==== CONFIGURATION ==== ###
+
+# Token
+ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Stage 1 output
-INPUT_CSV = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_csv\road_network\Frankendael_sample_points.csv"
+INPUT_CSV = CSV_PATHS["road_network"] / "Frankendael_sample_points.csv"
 
-# Output folders (match your pipeline naming)
-BASE_RESULTS = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images"
-
-RAW_DIR   = os.path.join(BASE_RESULTS, "raw_images")
-ROT_DIR   = os.path.join(BASE_RESULTS, "rotated_images")
-LEFT_DIR  = os.path.join(BASE_RESULTS, "left_facades")
-RIGHT_DIR = os.path.join(BASE_RESULTS, "right_facades")
+# Output folders
+RAW_DIR   = IMAGE_PATHS["raw_images"]
+ROT_DIR   = IMAGE_PATHS["rotated_images"]
+LEFT_DIR  = IMAGE_PATHS["left_facades"]
+RIGHT_DIR = IMAGE_PATHS["right_facades"]
 
 # Perspective crop settings
 FOV_DEG = 90     # field of view in degrees

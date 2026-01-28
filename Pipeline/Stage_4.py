@@ -6,6 +6,7 @@ import math
 import numpy as np
 import pandas as pd
 from PIL import Image
+from Stage_0 import CSV_PATHS, IMAGE_PATHS
 
 ## === CONFIGURATION ==== ###
 BAND_FRAC = 0.6        # fraction of image width to keep in center band for vertical extent detection
@@ -17,10 +18,15 @@ IMG_H_PX = 600            # height of perspective crops (pixels)
 # If False: skip those rows entirely
 WRITE_FAIL_ROWS = True
 
-STAGE1_CSV = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_csv\road_network\Frankendael_sample_points.csv"
-STAGE4_CSV = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_csv\Main_results\Facade_height_area_estimations.csv"
-LEFT_SEGS_DIR = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\left_segs"
-RIGHT_SEGS_DIR = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\right_segs"
+# Input from Stage 1
+STAGE1_CSV = CSV_PATHS["road_network"] / "Frankendael_sample_points.csv"
+
+# Output of Stage 4
+STAGE4_CSV = CSV_PATHS["Main_results"] / "Facade_height_area_estimations.csv"
+
+# Segmentation inputs
+LEFT_SEGS_DIR = IMAGE_PATHS["left_segs"]
+RIGHT_SEGS_DIR = IMAGE_PATHS["right_segs"]
 
 ### ==== MASK IO HELPERS ==== ###  
 def load_mask(mask_path):

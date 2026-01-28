@@ -7,16 +7,16 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from samgeo.text_sam import LangSAM
-
+from Stage_0 import IMAGE_PATHS
 
 ### ==== CONFIGURATION ==== ###
-TEMP_DIR = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\temp_segs" # temporary storage for LangSAM .tif outputs
+TEMP_DIR = IMAGE_PATHS["temp_segs"]
 
-INPUT_DIR_LEFT = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\left_facades"
-INPUT_DIR_RIGHT = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\right_facades"
+INPUT_DIR_LEFT = IMAGE_PATHS["left_facades"]
+INPUT_DIR_RIGHT = IMAGE_PATHS["right_facades"]
 
-OUTPUT_DIR_LEFT = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\left_segs"
-OUTPUT_DIR_RIGHT = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_images\right_segs"
+OUTPUT_DIR_LEFT = IMAGE_PATHS["left_segs"]
+OUTPUT_DIR_RIGHT = IMAGE_PATHS["right_segs"]
 
 SAVE_OVERLAYS = False # If True, saves RGBA overlay images for visual purposes
 
