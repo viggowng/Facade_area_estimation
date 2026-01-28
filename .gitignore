@@ -1,0 +1,33 @@
+# Environments
+.venv/
+venv/
+
+# Caches / temp
+cache/
+Pipeline/cache/
+temp/
+temp_segs/
+temp_center_bands/
+
+# Large generated data
+raw_images/
+rotated_images/
+left_facades/
+right_facades/
+left_segs/
+right_segs/
+Images/
+Results/
+CSV/
+Buildings.gpkg
+Frankendael_geom.gpkg
+Results_csv
+
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+
