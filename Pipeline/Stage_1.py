@@ -5,12 +5,15 @@
 from vt2geojson.tools import vt_bytes_to_geojson
 from shapely.geometry import Point, LineString, MultiLineString, Polygon
 from shapely.ops import unary_union, linemerge, nearest_points
-
 from scipy.spatial import cKDTree
 
 import geopandas as gpd
+import pandas as pd
 import osmnx as ox
 import mercantile
+import matplotlib
+matplotlib.use("Agg")  # <- IMPORTANT: no Tkinter
+import matplotlib.pyplot as plt
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -26,19 +29,32 @@ from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 
 ### ==== CONFIGURATION ==== ###
 
+# Unique mapillary token
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
-NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Frankendael_geom.gpkg"
+# Case study area
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Neighbourhood_bounds.gpkg"
 NEIGH_LAYER = None
 
+# BAG datafile 
 BUILDINGS_FILE = PROJECT_ROOT / "Input_data" / "Buildings.gpkg"
 BUILDINGS_LAYER = None
 
-SAMPLES_OUT = CSV_PATHS / "road_network" / "Frankendael_sample_points.csv"
+# If chosen for manual point input
+POINTS_MANUAL = PROJECT_ROOT / "Input_data" / "Manual_points.gpkg"
+POINTS_MANUAL_LAYER = None
+
+# Output .csv 
+SAMPLES_OUT = CSV_PATHS["road_network"] / "sample_points.csv"
 
 # CRS
 CRS_WGS84 = "EPSG:4326"    # WSG84 (mapillary crs)
 CRS_METRIC = "EPSG:28992"  # RD New crs
+
+# Crossroad deletion parameters
+PUNCH_INTERSECTION_HOLES = True
+INTERSECTION_DEGREE_MIN = 4      # 4 = crossroads; set to 3 to also remove T-junctions
+INTERSECTION_BUFFER_M = 7        # <-- iterative testing
 
 # Road sampling
 POINT_SPACING_M = 30            # Distance between sample points along roads
@@ -46,7 +62,7 @@ BEARING_EPS_M = 5               # how far to look forward/back along a road line
 
 # Mapillary tile lookup
 TILE_ZOOM = 14
-MAX_PANO_DIST_M = 50            # max tolerated distance between sample coordinates and nearest Mapillary pano
+MAX_PANO_DIST_M = 5            # max tolerated distance between sample coordinates and nearest Mapillary pano
 TILESET = "mly1_public"
 TILE_WORKERS = 10
 
@@ -54,7 +70,14 @@ TILE_WORKERS = 10
 STRIP_LENGTH_M = 80             # max distance to search for facades perpendicular to road
 STRIP_HALF_WIDTH_M = 4          # half-width of the perpendicular search strip -> prevents the ray from missing slightly offset buildings
 BUILDING_SEARCH_DIST_M = 20     # candidate building search radius (bbox prefilter)
-MAX_FACADE_DIST_M = 15.0        # cutoff: if nearest facade further than this -> set to 0.0
+MAX_FACADE_DIST_M = 20          # if distance is farther, it is set to 0.0 (parameter found through iterative testing)
+
+# "auto" or "manual" to toggle between manual point insertion or automatic point creation
+SAMPLING_MODE = "manual"  
+
+# Creates a map of the output road network + sampling points
+PLOT_MAP = True
+PLOT_OUT = CSV_PATHS["road_network"] / "road_sampling_map.png"
 # ============================================================
 
 #-------------------------------------------------------------
@@ -83,15 +106,19 @@ def bearing_from_two_points(p0, p1):
 
 def load_boundaries(path, layer=None):
     """
-    Loads a neighbourhood polygon and returns it in EPSG:4326 (required by OSMnx).
+    Loads a neighbourhood polygon layer and returns a SINGLE (multi)polygon in EPSG:4326.
+    If the layer contains multiple features, they are dissolved/unioned into one geometry.
     """
-    gdf = gpd.read_file(path, layer=layer) if layer else gpd.read_file(path)    #gdf = GeoDataFrama which is used by Geopandas to store geospatial data
-    if len(gdf) == 0:                   # checks if there are no features in the gdf
+    gdf = gpd.read_file(path, layer=layer) if layer else gpd.read_file(path)
+
+    if len(gdf) == 0:
         raise ValueError("Neighbourhood polygon file has no features.")
     if gdf.crs is None:
         raise ValueError("Neighbourhood polygon has no CRS.")
 
-    poly = gdf.geometry.iloc[0]
+    # Union/dissolve all features into one geometry (instead of taking iloc[0])
+    poly = gdf.geometry.union_all()
+
     poly_4326 = gpd.GeoSeries([poly], crs=gdf.crs).to_crs(CRS_WGS84).iloc[0]
 
     # fix minor validity issues
@@ -99,6 +126,81 @@ def load_boundaries(path, layer=None):
         poly_4326 = poly_4326.buffer(0)
 
     return poly_4326
+
+def remove_intersections(edges_gdf, G_proj, buffer_m=10.0, degree_min=4):
+    """
+    Removes road parts around intersection nodes by buffering nodes and subtracting the buffer.
+    """
+    # Nodes in metric CRS
+    nodes = ox.graph_to_gdfs(G_proj, nodes=True, edges=False)
+
+    # Graph topological degree
+    deg = dict(G_proj.degree())
+    nodes["degree"] = nodes.index.map(deg)
+
+    # Select intersections
+    inter = nodes[nodes["degree"] >= degree_min].copy()
+    if len(inter) == 0:
+        return edges_gdf, None, nodes
+
+    # Buffer intersection nodes and union
+    inter_buf = inter.geometry.buffer(float(buffer_m))
+    holes = inter_buf.union_all()
+
+    out = edges_gdf.copy()
+    out["geometry"] = out.geometry.apply(
+        lambda g: g.difference(holes) if g is not None and not g.is_empty else g
+    )
+
+    # explode multipart leftovers + drop empties
+    out = out.explode(index_parts=False).reset_index(drop=True)
+    out = out[~out.geometry.is_empty].copy()
+    out = out[out.geometry.length > 0.5].copy()  # remove tiny artifacts
+
+    return out, inter_buf, nodes
+
+def plot_roads_and_points(edges_metric, points_wgs84, boundary_4326=None, inter_buf=None, out_png=None, title=None):
+
+    pts_m = points_wgs84.to_crs(CRS_METRIC)
+
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    # --------------------
+    # NEW: plot boundary
+    # --------------------
+    if boundary_4326 is not None:
+        boundary_m = gpd.GeoSeries([boundary_4326], crs=CRS_WGS84).to_crs(CRS_METRIC)
+        boundary_m.boundary.plot(
+            ax=ax,
+            linewidth=2.0,
+            linestyle="--"
+        )
+
+    # roads
+    edges_metric.plot(ax=ax, linewidth=0.8)
+
+    # intersection buffers
+    if inter_buf is not None and len(inter_buf) > 0:
+        gpd.GeoSeries(inter_buf, crs=CRS_METRIC).plot(ax=ax, alpha=0.25)
+
+    # points
+    pts_m.plot(ax=ax, markersize=10)
+
+    ax.set_aspect("equal", "box")
+    ax.set_axis_off()
+
+    if title:
+        ax.set_title(title)
+
+    if out_png:
+        out_png = Path(out_png)
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out_png, dpi=200, bbox_inches="tight")
+        print("Saved debug plot to:", out_png)
+
+    plt.close(fig)
+
+
 # ============================================================
 
 # ------------------------------------------------------------
@@ -106,33 +208,162 @@ def load_boundaries(path, layer=None):
 ### ==== Road network creation -> sample points + attributes ==== ###
 def get_roads_in_neighbourhood(poly_4326):
     """
-    Downloads OSM roads in the neighbourhood polygon (WGS84), then projects to EPSG:28992.
-    Merges all road edges into one multi/linestring geometry (for sampling).
+    Downloads OSM roads in the neighbourhood polygon (WGS84), projects to EPSG:28992.
+    Optionally punches holes around intersections before merging, to avoid sampling on crossroads.
+
+    Returns:
+      roads_merged_gdf (GeoDataFrame): one merged Line/MultiLine geometry in CRS_METRIC
+      edges_clean (GeoDataFrame): individual road geometries after clipping and (optional) punching
+      inter_buf (GeoSeries or None): intersection buffers used (for plotting)
     """
-    # Restrict to residential roads (other roads are less relevant for facade segmentation)
-    cf = '["highway"="residential"]'
 
-    # OSMnx graph from polygon (must be EPSG:4326)
-    G = ox.graph_from_polygon(poly_4326, simplify=True, truncate_by_edge=True, custom_filter=cf)
+    cf = '["highway"~"residential|living_street|unclassified|service|tertiary|secondary"]'
 
-    # Project the graph to metric CRS for distance/spacing operations
+    G = ox.graph_from_polygon(
+    poly_4326,
+    simplify=True,
+    custom_filter=cf
+)
+
     G_proj = ox.project_graph(G, to_crs=CRS_METRIC)
     _, edges = ox.graph_to_gdfs(G_proj)
 
-    # Clip to neighbourhood (also in metric CRS)
+    # Now clip in metric CRS (your existing clip)
     poly_28992 = gpd.GeoSeries([poly_4326], crs=CRS_WGS84).to_crs(CRS_METRIC).iloc[0]
     edges = edges.clip(poly_28992)
+
 
     # Keep only geometries
     edges = edges[["geometry"]].copy()
     edges = edges.reset_index(drop=True)
     edges.set_crs(CRS_METRIC, inplace=True)
 
-    # Merge to one geometry -> required for evenly spread samples
-    merged = linemerge(unary_union(edges.geometry))
-    return gpd.GeoDataFrame(geometry=[merged], crs=CRS_METRIC)
+    inter_buf = None
 
+    # ---- Removes intersections ----
+    if PUNCH_INTERSECTION_HOLES:
+        edges_clean, inter_buf, _nodes = remove_intersections(
+            edges_gdf=edges,
+            G_proj=G_proj,
+            buffer_m=INTERSECTION_BUFFER_M,
+            degree_min=INTERSECTION_DEGREE_MIN,
+        )
+        print(f"[roads] punched holes: degree>={INTERSECTION_DEGREE_MIN}, buffer={INTERSECTION_BUFFER_M}m, "
+              f"edges {len(edges)} -> {len(edges_clean)}")
+    else:
+        edges_clean = edges
 
+    # Merge to one geometry for evenly spread samples
+    merged = linemerge(unary_union(edges_clean.geometry))
+    roads_merged = gpd.GeoDataFrame(geometry=[merged], crs=CRS_METRIC)
+
+    return roads_merged, edges_clean, inter_buf
+
+# Code when doing manual point creation (.gpkg input file)
+def manual_points_with_attributes(
+    roads_28992,
+    points_gpkg,
+    points_layer=None,
+    input_crs=CRS_WGS84,
+    bearing_eps_m=BEARING_EPS_M,
+):
+    """
+    Create a test/evaluation sample set from manually defined points (GeoPackage)
+    and compute road_angle by snapping points to the nearest road segment.
+
+    Input:
+      - points_gpkg: path to a vector file (GPKG/GeoJSON/Shapefile etc.) with point geometry
+      - points_layer: optional layer name (only needed if gpkg has multiple layers)
+
+    Output:
+      GeoDataFrame in EPSG:4326 with columns:
+        - geometry (Point)
+        - road_angle (bearing at snapped road segment)
+        - xcoord, ycoord
+        - FID
+
+    Notes:
+      - Points are snapped to the nearest road segment before bearing is computed,
+        to make bearings consistent with your distance + strip method.
+      - If bearing cannot be computed for a point, road_angle is set to None.
+    """
+    # -----------------------------
+    # 1) Load points
+    # -----------------------------
+    gdf = gpd.read_file(points_gpkg, layer=points_layer) if points_layer else gpd.read_file(points_gpkg)
+
+    if gdf.crs is None:
+        # assume WGS84 if not set, but better to set in QGIS/export
+        gdf = gdf.set_crs(input_crs)
+
+    if not all(gdf.geometry.geom_type.isin(["Point", "MultiPoint"])):
+        raise ValueError("Input vector must contain Point geometries.")
+
+    # explode multipoints if any
+    gdf = gdf.explode(index_parts=False).reset_index(drop=True)
+
+    # -----------------------------
+    # 2) Work in metric CRS
+    # -----------------------------
+    pts_28992 = gdf.to_crs(CRS_METRIC).copy()
+
+    # Build road segments + sindex once
+    roads_geom = roads_28992.to_crs(CRS_METRIC).geometry.iloc[0]
+    road_segments = build_road_segments_gdf(roads_geom)
+    road_sindex = road_segments.sindex
+
+    bearings = []
+    snapped_points = []
+
+    # -----------------------------
+    # 3) Snap + bearing per point
+    # -----------------------------
+    snap_fail = 0
+    bear_fail = 0
+
+    for row in pts_28992.itertuples():
+        pt = row.geometry
+        if pt is None or pt.is_empty:
+            bearings.append(None)
+            snapped_points.append(pt)
+            continue
+
+        try:
+            snapped, seg_line, s = snap_point_to_nearest_segment(pt, road_segments, road_sindex)
+        except Exception as e:
+            snap_fail += 1
+            snapped_points.append(pt)
+            bearings.append(None)
+            continue
+
+        bearing = local_bearing_on_line(seg_line, s, eps=bearing_eps_m)
+        if bearing is None or not np.isfinite(bearing):
+            bear_fail += 1
+
+        snapped_points.append(snapped)
+        bearings.append(bearing)
+
+    print(f"[manual] snap_fail={snap_fail}, bear_fail={bear_fail}, n={len(pts_28992)}")
+
+    pts_28992["geometry"] = snapped_points
+    pts_28992["road_angle"] = bearings
+
+    # -----------------------------
+    # 4) Export in EPSG:4326 + standard columns
+    # -----------------------------
+    out = pts_28992.to_crs(CRS_WGS84)
+    out["xcoord"] = out.geometry.x
+    out["ycoord"] = out.geometry.y
+
+    # If user already has an ID column you can keep it; otherwise create FID
+    if "FID" not in out.columns:
+        out["FID"] = np.arange(1, len(out) + 1)
+
+    # Match output contract of sample_points_with_local_bearing
+    keep_cols = [c for c in ["FID", "xcoord", "ycoord", "road_angle", "geometry"] if c in out.columns]
+    return out[keep_cols].copy()
+
+# code for automatic sampling (points every X meters along road network)
 def sample_points_with_local_bearing(roads_28992, spacing_m=30, eps_m=5):
     """
     Samples points every spacing_m meters along the road network,
@@ -197,7 +428,7 @@ def get_features_for_tile(tile, access_token, tileset=TILESET):
 
 
 def attach_nearest_panorama_from_tiles(points_gdf_metric, access_token,
-                                       max_distance=50, zoom=14, tileset=TILESET, workers=10):
+                                       max_distance=MAX_PANO_DIST_M, zoom=14, tileset=TILESET, workers=10):
     """
     For each point:
     - determine which Mapillary vector tile it falls in
@@ -389,7 +620,7 @@ def add_left_right_facade_distances_wide_strip(
     strip_half_width=4,
     building_search_dist=60,
     eps_bearing=5,
-    max_facade_dist=15.0,
+    max_facade_dist=MAX_FACADE_DIST_M,
 ):
     """
     Compute dist_left_m and dist_right_m for each point.
@@ -399,8 +630,8 @@ def add_left_right_facade_distances_wide_strip(
     - Derive local road bearing at snap location.
     - Build two strips: left normal and right normal.
     - Intersect strips with nearby building polygons (prefilter via buildings sindex).
-    - Distance is computed as *projection* onto the strip normal (not Euclidean),
-      so you measure "perpendicular distance" in the intended direction.
+    - Distance is computed as *projection* onto the strip normal,
+      so it measures "perpendicular distance" in the intended direction, matching the direction of the camera
 
     Cutoff:
     - If no building is found within strip OR nearest is farther than max_facade_dist => 0.0
@@ -515,13 +746,40 @@ if __name__ == "__main__":
     # 1) Load neighbourhood polygon (WGS84)
     poly_4326 = load_boundaries(NEIGH_FILE, layer=NEIGH_LAYER)
 
-    # 2) Download and merge residential roads (metric CRS)
-    roads_28992 = get_roads_in_neighbourhood(poly_4326)
+    # 2) Download roads + punch holes + get edges for plotting
+    roads_28992, edges_clean_28992, inter_buf = get_roads_in_neighbourhood(poly_4326)
 
-    # 3) Sample points along roads + compute local bearing
-    points_wgs84 = sample_points_with_local_bearing(
-        roads_28992, spacing_m=POINT_SPACING_M, eps_m=BEARING_EPS_M
-    )
+    # 3) Sample points (auto) OR uses manual evaluation points (toggle in config)
+    if SAMPLING_MODE.lower() == "auto":
+        points_wgs84 = sample_points_with_local_bearing(
+            roads_28992, spacing_m=POINT_SPACING_M, eps_m=BEARING_EPS_M
+        )
+        print(f"Sampling mode = AUTO, points = {len(points_wgs84)}")
+
+    elif SAMPLING_MODE.lower() == "manual":
+        points_wgs84 = manual_points_with_attributes(
+            roads_28992,
+            points_gpkg=POINTS_MANUAL,
+            points_layer=POINTS_MANUAL_LAYER,
+            input_crs=CRS_WGS84,
+            bearing_eps_m=BEARING_EPS_M,
+        )
+        print(f"Sampling mode = MANUAL, points = {len(points_wgs84)}")
+
+    else:
+        raise ValueError("SAMPLING_MODE must be 'auto' or 'manual'")
+
+    # ---- Plots a map of roads + sample points ----
+    if PLOT_MAP:
+        plot_roads_and_points(
+            edges_metric=edges_clean_28992,
+            points_wgs84=points_wgs84,
+            boundary_4326=poly_4326,   # <<< ADD THIS
+            inter_buf=inter_buf,
+            out_png=PLOT_OUT,
+            title=f"Roads after intersection holes + sample points (spacing={POINT_SPACING_M}m)",
+        )
+    # --------------------------------------------------------
 
     # 4) Attach nearest Mapillary pano using vector tiles (needs metric for distance threshold)
     points_metric = points_wgs84.to_crs(CRS_METRIC)
@@ -539,7 +797,7 @@ if __name__ == "__main__":
 
     # 6) Compute left/right facade distances using wide strips + cutoff
     points_final = add_left_right_facade_distances_wide_strip(
-        points_with_panos,         # contains points + pano info
+        points_with_panos,
         buildings_gdf=buildings,
         roads_28992=roads_28992,
         strip_length=STRIP_LENGTH_M,
@@ -562,3 +820,4 @@ if __name__ == "__main__":
     print("Saved CSV to:", SAMPLES_OUT)
     print("Columns exported:", export_cols)
     print("Ready for stage 2: Image downloading and processing.")
+

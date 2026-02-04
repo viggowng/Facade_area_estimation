@@ -10,7 +10,7 @@ from Stage_0 import CSV_PATHS, IMAGE_PATHS
 
 ## === CONFIGURATION ==== ###
 BAND_FRAC = 0.6        # fraction of image width to keep in center band for vertical extent detection
-MIN_ROW_FRAC = 0.06    # minimum fraction of row pixels to consider row as facade (default 6%)
+MIN_ROW_FRAC = 0.1    # minimum fraction of row pixels to consider row as facade (default 6%)
 VFOV_DEG = 90              # vertical field of view of perspective crops (degrees)
 IMG_H_PX = 600            # height of perspective crops (pixels)
 
@@ -19,7 +19,7 @@ IMG_H_PX = 600            # height of perspective crops (pixels)
 WRITE_FAIL_ROWS = True
 
 # Input from Stage 1
-STAGE1_CSV = CSV_PATHS["road_network"] / "Frankendael_sample_points.csv"
+STAGE1_CSV = CSV_PATHS["road_network"] / "sample_points.csv"
 
 # Output of Stage 4
 STAGE4_CSV = CSV_PATHS["Main_results"] / "Facade_height_area_estimations.csv"
@@ -118,64 +118,29 @@ def detect_vertical_extents(mask, thresh=128, min_row_frac=MIN_ROW_FRAC):
 
     return (top_part), (bottom_part)
 
-def height_from_parts(top_part_px, bottom_part_px, dist_m, vfov_deg= VFOV_DEG, img_h_px=600):
+def height_from_parts(top_part_px, bottom_part_px, dist_m, vfov_deg=VFOV_DEG, img_h_px=600):
     """
-    Estimate façade height (meters) from pixel offsets in a rectilinear (perspective) image.
+    Old / simplified height estimation method:
+    - Convert pixel offsets to angles by linear scaling within the VFOV
+    - Then use: height = d * (tan(alpha_top) + tan(alpha_bottom))
 
-    Main height formula:
-        height = d · (tan(α_top) + tan(α_bottom))
-
-    where:
-        d          = horizontal distance from camera to façade (m)
-        α_top      = vertical angle from optical axis to façade top
-        α_bottom   = vertical angle from optical axis to façade bottom
-
-    This function performs three steps:
+    Assumption:
+    - Vertical angle changes linearly with pixel offset from image center
+      (i.e., ignores the pinhole projection relationship).
     """
 
-    # Step 1) Camera geometry -> Computing effective focal length (fy):
-    """
-    The effective focal length in pixel units (fy) is derived from the known
-    vertical field of view (VFOV = 90) and the image height (H = 600 pixels).
-    
-        fy = (H/2) / tan(VFOV/2)
+    half_h = img_h_px / 2.0
+    half_vfov_rad = math.radians(vfov_deg / 2.0)
 
-    Explanation fy:
-        focal length (fy) is the distance between sensor and the lens (see Figure 3).
-        this determines the the required field of view to capture the facade height 
-        (also known as the effective vertical fov)
-    """
-    vfov_rad = math.radians(VFOV_DEG)       # Convert VFOV from degrees to radians
-    fy = (img_h_px / 2.0) / math.tan(vfov_rad / 2.0)
+    # pixel offset ratio relative to half the image height
+    r_top = top_part_px / half_h
+    r_bottom = bottom_part_px / half_h
 
-    # Step 2) Image to angle conversion
-    """
-    Pixel offsets from the image optical axis are converted into tangents of
-    the vertical angles -> effective vfov:
+    # linear pixels->angle mapping (old approximation)
+    alpha_top = r_top * half_vfov_rad
+    alpha_bottom = r_bottom * half_vfov_rad
 
-           tan(α_top)    = top_part_px / fy
-           tan(α_bottom) = bottom_part_px / fy
-    
-    Note:
-       There is no need to compute theta = atan(p/fy) because substituting that in tan(theta) -> tan(atan(p/fy)),
-       and tan(atan(x)) = x. 
-       So the formula can be simplified to tan(theta).
-    """
-    
-    tan_top = top_part_px / fy
-    tan_bottom = bottom_part_px / fy
-
-    # 3) Angle to metric height
-    """
-    Using the height formula:
-       height = d * (tan(α_top)) + tan(α_bottom))
-
-     where:
-       height_top_m    = d * tan_top
-       height_bottom_m = d * tan_bottom
-    """
-    height_m = dist_m * (tan_top + tan_bottom)
-
+    height_m = dist_m * (math.tan(alpha_top) + math.tan(alpha_bottom))
     return height_m
 # ============================================================
 

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from samgeo.text_sam import LangSAM
-from Stage_0 import IMAGE_PATHS
+from Stage_0 import IMAGE_PATHS, CSV_PATHS
 
 ### ==== CONFIGURATION ==== ###
 TEMP_DIR = IMAGE_PATHS["temp_segs"]
@@ -19,6 +19,8 @@ OUTPUT_DIR_LEFT = IMAGE_PATHS["left_segs"]
 OUTPUT_DIR_RIGHT = IMAGE_PATHS["right_segs"]
 
 SAVE_OVERLAYS = False # If True, saves RGBA overlay images for visual purposes
+
+STAGE1_CSV = CSV_PATHS["road_network"] / "sample_points.csv"
 
 PROMPTS = {
     "facades": ("facade, building facade", 0.20),
@@ -35,17 +37,6 @@ PROMPTS = {
 # ============================================================
 
 # -------------------------------------------
-
-### ==== VISIBILITY / STAGE-1 LINK ==== ###
-STAGE1_CSV = r"C:\Users\viggo\OneDrive - Universiteit Utrecht\Year 2\Thesis\Python_thesis\Facade_area_estimation\Results_csv\road_network\Frankendael_sample_points.csv"
-# Expected columns:
-#  - image_id
-#  - dist_left_m
-#  - dist_right_m
-
-
-
-# -------------------------------------------------
 
 ### ==== HELPERS ==== ###
 def clear_temp_tifs(folder):
@@ -97,7 +88,7 @@ def save_overlay(image_path, mask, out_path, rgba=(0, 255, 0, 110)):
 # -------------------------------------------------
 
 ### ==== Facade visibility clause ==== ###
-def visible_facade_from_row(row, side) -> bool:
+def visible_facade_by_distance(row, side) -> bool:
     """
     Uses Stage 1 distances to decide if a façade is visible.
     If distance is 0.0 the code considers there is no visible façade on that side.
@@ -180,20 +171,22 @@ def segment_image(image_path, sam):
     usable[masks["windows"] > 128] = 0
     usable[masks["doors"] > 128] = 0
         # Why 128?
-        #   The produced mask is grayscale 0 (black) -> 255 (white).
+        #   The produced mask is grayscale: 0 (black) -> 255 (white).
         #   The selected pixels in the mask (facades, windows, etc.) are in the white range (> 128).
         #   128 is a safe threshold to make sure all pixels are properly selected.
         #   It could be changed to i.e. usable[masks["windows"] == 255] = 0,
         #   but that might miss some pixels that are slightly less than 255.    
 
-    # Roof safety check (prevents "entire building becomes roof")
-    fac_area  = (masks["facades"] > 128).sum()
-    roof_area = (masks["roofs"] > 128).sum()
+    # Roof safety check (prevents "entire building becoming roof")
+    fac_area  = (masks["facades"] > 128).sum()  # total mask pixels
+    roof_area = (masks["roofs"] > 128).sum()    # total roof pixels 
 
     # If roof mask is suspiciously large relative to the facade mask,
     # it is likely a false positive (e.g., dark/brown facade interpreted as roof).
-    MAX_ROOF_FACADE_RATIO = 0.6  # fraction of tolerated roof area relative to facade area
-
+    
+    # fraction of tolerated roof area relative to facade area
+    MAX_ROOF_FACADE_RATIO = 0.6  # <-- found through iterative process
+   
     if fac_area > 0 and (roof_area / fac_area) <= MAX_ROOF_FACADE_RATIO:
         usable[masks["roofs"] > 128] = 0
     else:
@@ -227,35 +220,38 @@ def run_folder(in_dir, out_dir, sam, stage1_df=None, side=None):
     # Build quick lookup: image_id -> row-dict (only if Stage 1 provided)
     lookup = None
     if stage1_df is not None:
-        # Force to string for consistent matching with filenames
-        stage1_df = stage1_df.copy()
-        stage1_df["image_id"] = stage1_df["image_id"].astype(str)
-        lookup = stage1_df.set_index("image_id").to_dict(orient="index")
+        
+        stage1_df = stage1_df.copy()        # makes a copy to avoid modifying the original
+        stage1_df["image_id"] = stage1_df["image_id"].astype(str)           # Forces image_id to be a string (lookup fails if it is no string)
+        lookup = stage1_df.set_index("image_id").to_dict(orient="index")    # creates an index to speed up search process
 
-    for i, fn in enumerate(files, start=1):
+    for i, fn in enumerate(files, start=1):                 # starts loop over images
         image_path = os.path.join(in_dir, fn)
-        base = os.path.splitext(fn)[0]   # e.g. "left_12345"
-        mask_out = os.path.join(out_dir, f"{base}.png")
+        base = os.path.splitext(fn)[0]                      # e.g. "left_12345"
+        mask_out = os.path.join(out_dir, f"{base}.png")     # Saves image in output_dir as.png
 
         # ---------------------------------------------
-        # Stage-1 distance gate (writes black mask)
+        # Segmentation under special circumstances
         # ---------------------------------------------
-        if lookup is not None and side in ("left", "right"):
-            # Expect filenames like: left_<image_id>.jpg or right_<image_id>.jpg
-            # We extract the id by removing the prefix up to the first underscore.
+        
+        # if rows has values and side is correct-> moves on to segmentation
+        if lookup is not None and side in ("left", "right"): 
+            # splits filename at 1st "_" and grabs the part after it-> "left_123445" becomes "123445"
             if "_" in base:
-                image_id = base.split("_", 1)[1]
+                image_id = base.split("_", 1)[1] 
             else:
-                image_id = base  # fallback
+                image_id = base  # fallback for safety
 
             row = lookup.get(str(image_id))
+            
+            # If no Stage 1 row exists, the code treats it as "not segmentable" to be safe.
             if row is None:
-                # If no Stage 1 row exists, we treat it as "not segmentable" to be safe.
                 write_black_mask_like(image_path, mask_out)
                 print(f"[{i}/{len(files)}] SKIP: {fn} -> no Stage 1 row for image_id={image_id} (wrote black mask)")
                 continue
 
-            if not visible_facade_from_row(row, side):
+            # If visible_facade_by distance == 0 -> write black mask and skips segmentation 
+            if not visible_facade_by_distance(row, side):
                 write_black_mask_like(image_path, mask_out)
                 print(f"[{i}/{len(files)}] SKIP: {fn} -> no visible façade (dist_{side}_m={row.get(f'dist_{side}_m')}) (wrote black mask)")
                 continue

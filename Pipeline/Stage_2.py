@@ -18,7 +18,7 @@ from Stage_0 import MAPILLARY_TOKEN, CSV_PATHS, IMAGE_PATHS
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Stage 1 output
-INPUT_CSV = CSV_PATHS["road_network"] / "Frankendael_sample_points.csv"
+INPUT_CSV = CSV_PATHS["road_network"] / "sample_points.csv"
 
 # Output folders
 RAW_DIR   = IMAGE_PATHS["raw_images"]
