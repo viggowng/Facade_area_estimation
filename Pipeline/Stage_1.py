@@ -33,7 +33,7 @@ from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Case study area
-NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Neighbourhood_bounds.gpkg"
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Demo_bounds.gpkg"
 NEIGH_LAYER = None
 
 # BAG datafile 
@@ -73,7 +73,7 @@ BUILDING_SEARCH_DIST_M = 20     # candidate building search radius (bbox prefilt
 MAX_FACADE_DIST_M = 20          # if distance is farther, it is set to 0.0 (parameter found through iterative testing)
 
 # "auto" or "manual" to toggle between manual point insertion or automatic point creation
-SAMPLING_MODE = "manual"  
+SAMPLING_MODE = "auto"  
 
 # Creates a map of the output road network + sampling points
 PLOT_MAP = True
@@ -806,8 +806,7 @@ if __name__ == "__main__":
         eps_bearing=BEARING_EPS_M,
         max_facade_dist=MAX_FACADE_DIST_M,
     )
-
-    # 7) Export
+    # 7) Export (dedupe + drop missing image_id)
     export_cols = [
         "FID", "xcoord", "ycoord",
         "road_angle",
@@ -816,8 +815,27 @@ if __name__ == "__main__":
     ]
     export_cols = [c for c in export_cols if c in points_final.columns]
 
-    points_final[export_cols].to_csv(SAMPLES_OUT, index=False)
+    df = points_final.copy()
+
+    # Normalize image_id to a clean string and treat missing as empty
+    df["image_id"] = (
+        df["image_id"]
+        .astype("string")                         # keeps NA as <NA>
+        .str.replace(r"\.0$", "", regex=True)
+        .fillna("")                               # <NA> -> ""
+        .str.strip()
+    )
+
+    # Drop rows without a pano id
+    df = df[df["image_id"] != ""]
+
+    # Keep best row per image_id: smallest pano snap distance
+    df = df.sort_values("distance_m").drop_duplicates("image_id", keep="first")
+
+    df[export_cols].to_csv(SAMPLES_OUT, index=False)
     print("Saved CSV to:", SAMPLES_OUT)
     print("Columns exported:", export_cols)
     print("Ready for stage 2: Image downloading and processing.")
+
+
 

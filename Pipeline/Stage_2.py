@@ -238,7 +238,8 @@ def download_images(input_csv, image_id_col="image_id"):
 
     Safe to re-run due to caching/overwrite logic in download_pano/process_image.
     """
-    df = pd.read_csv(input_csv)
+    df = pd.read_csv(input_csv, dtype={"image_id": str})
+    df["image_id"] = df["image_id"].astype(str).str.replace(r"\.0$", "", regex=True)
 
     # Minimal requirements for this stage
     required = {image_id_col, "road_angle"}
