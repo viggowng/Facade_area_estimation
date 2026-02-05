@@ -1,3 +1,7 @@
+# Do this first separate before the others
+# !pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+# Pip install -r requirements.txt
 # --- geospatial + general ---
 geopandas
 osmnx
@@ -18,8 +22,6 @@ opencv-python-headless
 
 # --- segmentation stack (this is the key) ---
 segment-geospatial[samgeo3]==1.2.1
-transformers>=4.38,<5
 
-# --- ML runtime (don’t pin CUDA builds in requirements; Colab handles that) ---
-torch
-torchvision
+# --- critical compatibility pin (you already needed this) ---
+transformers>=4.38,<5
