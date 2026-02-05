@@ -33,7 +33,7 @@ from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Case study area
-NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Demo_bounds.gpkg"
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Neighbourhood_bounds.gpkg"
 NEIGH_LAYER = None
 
 # BAG datafile 
@@ -52,12 +52,12 @@ CRS_WGS84 = "EPSG:4326"    # WSG84 (mapillary crs)
 CRS_METRIC = "EPSG:28992"  # RD New crs
 
 # Crossroad deletion parameters
-PUNCH_INTERSECTION_HOLES = True
+PUNCH_INTERSECTION_HOLES = False
 INTERSECTION_DEGREE_MIN = 4      # 4 = crossroads; set to 3 to also remove T-junctions
 INTERSECTION_BUFFER_M = 7        # <-- iterative testing
 
 # Road sampling
-POINT_SPACING_M = 30            # Distance between sample points along roads
+POINT_SPACING_M = 50            # Distance between sample points along roads
 BEARING_EPS_M = 5               # how far to look forward/back along a road line to derive road angle
 
 # Mapillary tile lookup
@@ -617,7 +617,7 @@ def add_left_right_facade_distances_wide_strip(
     buildings_gdf,
     roads_28992,
     strip_length=80,
-    strip_half_width=4,
+    strip_half_width=3,
     building_search_dist=60,
     eps_bearing=5,
     max_facade_dist=MAX_FACADE_DIST_M,
@@ -774,10 +774,10 @@ if __name__ == "__main__":
         plot_roads_and_points(
             edges_metric=edges_clean_28992,
             points_wgs84=points_wgs84,
-            boundary_4326=poly_4326,   # <<< ADD THIS
+            boundary_4326=poly_4326, 
             inter_buf=inter_buf,
             out_png=PLOT_OUT,
-            title=f"Roads after intersection holes + sample points (spacing={POINT_SPACING_M}m)",
+            title=f"Road network of input neighbourhood + sample points (spacing={POINT_SPACING_M}m)",
         )
     # --------------------------------------------------------
 
