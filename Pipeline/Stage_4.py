@@ -1,5 +1,5 @@
 # ============================================================
-# STAGE 4: FAÇADE HEIGHT AREA ESTIMATION
+# STAGE 4: FAÇADE HEIGHT + AREA ESTIMATION
 # ============================================================
 import os
 import math
@@ -8,11 +8,16 @@ import pandas as pd
 from PIL import Image
 from Stage_0 import CSV_PATHS, IMAGE_PATHS
 
-## === CONFIGURATION ==== ###
-BAND_FRAC = 0.6        # fraction of image width to keep in center band for vertical extent detection
-MIN_ROW_FRAC = 0.1    # minimum fraction of row pixels to consider row as facade (default 6%)
-VFOV_DEG = 90              # vertical field of view of perspective crops (degrees)
-IMG_H_PX = 600            # height of perspective crops (pixels)
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+BAND_FRAC = 0.8         # fraction of image width to keep in center band for vertical extent detection
+MIN_ROW_FRAC = 0.05     # minimum fraction of row pixels to consider row as facade (default 6%)
+
+# IMPORTANT:
+# VFOV_DEG must match the VFOV used in Stage 2 when generating the perspective crops.
+VFOV_DEG = 90           # vertical field of view of perspective crops (degrees)
 
 # If True: write rows even when missing masks / missing distance, but fill zeros + error message
 # If False: skip those rows entirely
@@ -28,7 +33,10 @@ STAGE4_CSV = CSV_PATHS["Main_results"] / "Facade_height_area_estimations.csv"
 LEFT_SEGS_DIR = IMAGE_PATHS["left_segs"]
 RIGHT_SEGS_DIR = IMAGE_PATHS["right_segs"]
 
-### ==== MASK IO HELPERS ==== ###  
+# ============================================================
+# MASK IO HELPERS
+# ============================================================
+
 def load_mask(mask_path):
     """
     Loads a mask image (e.g. *_mask.png) as a uint8 grayscale numpy array.
@@ -57,13 +65,11 @@ def save_overlay(image_path, mask, out_path, rgba=(0, 255, 0, 110), thresh=128):
     overlay[mask > thresh] = rgba
 
     Image.alpha_composite(img, Image.fromarray(overlay)).save(out_path)
+
+# ============================================================
+# CORE PROCESSING
 # ============================================================
 
-
-# -----------------------------------------------------------
-
-
-### ==== CORE PROCESSING ==== ###
 def keep_center_band(mask, frac=BAND_FRAC):
     """
     Keep only the center vertical band of the mask to reduce edge distortions.
@@ -78,11 +84,13 @@ def keep_center_band(mask, frac=BAND_FRAC):
     out[:, x1:] = 0
     return out
 
+
 def count_mask_pixels(mask, thresh=128):
     """
     Counts number of pixels classified as facade (mask pixels with value > 128 are seen as facade).
     """
     return int((mask > thresh).sum())
+
 
 def detect_vertical_extents(mask, thresh=128, min_row_frac=MIN_ROW_FRAC):
     """
@@ -96,77 +104,88 @@ def detect_vertical_extents(mask, thresh=128, min_row_frac=MIN_ROW_FRAC):
     Returns:
       top_part_px, bottom_part_px
     """
-    h, w = mask.shape 
+    h, w = mask.shape
     binm = (mask > thresh)                                  # Just to make sure the loaded mask is binary, though it should be already.
 
     row_counts = binm.sum(axis=1)                           # count facade pixels per row
     min_pixels = min_row_frac * w                           # minimum amount of pixels to be considered as facade (6% of the row).
-    # A minum row coverage filter is applied (default 6% of image width)
-    #This prevents loose pixels at the top of bottom of image from affecting the extents
-
+    # A minimum row coverage filter is applied (default 6% of image width)
+    # This prevents loose pixels at the top or bottom of image from affecting the extents
 
     good_rows = np.where(row_counts >= min_pixels)[0]       # good rows are the pixel rows with enough facade pixels to be considered facade
     if good_rows.size == 0:
         raise ValueError("No facade rows found after row-coverage filtering")
 
-    top_row = (good_rows.min())          # first good row (from top)
-    bottom_row = (good_rows.max())       # last good row (from top)
+    top_row = good_rows.min()                                # first good row (from top)
+    bottom_row = good_rows.max()                             # last good row (from top)
 
-    midrow = h // 2                      # middle row of the image (assumed horizon line)
-    top_part = midrow - top_row          # offset from midrow to top_row
-    bottom_part = bottom_row - midrow    # offset from midrow to bottom_row   
+    midrow = h // 2                                          # middle row of the image (assumed horizon line)
+    top_part = midrow - top_row                              # offset from midrow to top_row
+    bottom_part = bottom_row - midrow                        # offset from midrow to bottom_row
 
-    return (top_part), (bottom_part)
+    return int(top_part), int(bottom_part)
 
-def height_from_parts(top_part_px, bottom_part_px, dist_m, vfov_deg=VFOV_DEG, img_h_px=600):
+
+def height_from_parts_pinhole(top_part_px, bottom_part_px, dist_m, vfov_deg, img_h_px):
     """
-    Old / simplified height estimation method:
-    - Convert pixel offsets to angles by linear scaling within the VFOV
+    Correct rectilinear (pinhole) mapping:
+    - Convert pixel offsets from image center to elevation angles via atan(offset / fy)
     - Then use: height = d * (tan(alpha_top) + tan(alpha_bottom))
 
-    Assumption:
-    - Vertical angle changes linearly with pixel offset from image center
-      (i.e., ignores the pinhole projection relationship).
+    Assumptions:
+    - Camera pitch = 0 (horizon is at midrow)
+    - VFOV is known and matches the Stage 2 perspective crop VFOV
+    - dist_m is the perpendicular distance to the façade plane (or a good proxy)
     """
-
     half_h = img_h_px / 2.0
-    half_vfov_rad = math.radians(vfov_deg / 2.0)
+    vfov = math.radians(vfov_deg)
 
-    # pixel offset ratio relative to half the image height
-    r_top = top_part_px / half_h
-    r_bottom = bottom_part_px / half_h
+    # focal length in pixels (vertical)
+    fy = half_h / math.tan(vfov / 2.0)
 
-    # linear pixels->angle mapping (old approximation)
-    alpha_top = r_top * half_vfov_rad
-    alpha_bottom = r_bottom * half_vfov_rad
+    # pixel offsets from center (positive up for top_part, positive down for bottom_part)
+    alpha_top = math.atan(top_part_px / fy)
+    alpha_bottom = math.atan(bottom_part_px / fy)
 
     height_m = dist_m * (math.tan(alpha_top) + math.tan(alpha_bottom))
     return height_m
+
+# ============================================================
+# METRICS EXTRACTION
 # ============================================================
 
-# -----------------------------------------------------------
-
-### ==== Metrics Extraction ==== ###
 def metrics_from_mask(mask: np.ndarray, dist_m,
-                      vfov_deg= VFOV_DEG, img_h_px= IMG_H_PX,
-                      band_frac= BAND_FRAC, thresh=128,
-                      min_row_frac= MIN_ROW_FRAC):
+                      vfov_deg=VFOV_DEG,
+                      band_frac=BAND_FRAC, thresh=128,
+                      min_row_frac=MIN_ROW_FRAC):
     """
     One-call metric extraction:
       - total facade pixels (full mask)
       - vertical extents (center band)
       - height_px and height_m
 
+    IMPORTANT CHANGE:
+      - Uses the REAL mask height (mask.shape[0]) instead of a fixed IMG_H_PX constant.
+
     Returns:
       top_part_px, bottom_part_px, height_px, height_m, total_facade_pixels
     """
+    # Grab REAL image dimensions from the mask itself
+    img_h_px, img_w_px = mask.shape
+
     total_facade_pixels = count_mask_pixels(mask, thresh=thresh)
 
     band = keep_center_band(mask, frac=band_frac)
     top_part_px, bottom_part_px = detect_vertical_extents(band, thresh=thresh, min_row_frac=min_row_frac)
 
     height_px = top_part_px + bottom_part_px
-    height_m = height_from_parts(top_part_px, bottom_part_px, dist_m, vfov_deg=VFOV_DEG, img_h_px=img_h_px)
+    height_m = height_from_parts_pinhole(
+        top_part_px=top_part_px,
+        bottom_part_px=bottom_part_px,
+        dist_m=dist_m,
+        vfov_deg=vfov_deg,
+        img_h_px=img_h_px
+    )
 
     return top_part_px, bottom_part_px, height_px, height_m, total_facade_pixels
 
@@ -177,7 +196,7 @@ def facade_area_from_pixels(total_facade_pixels, height_m, height_px):
 
     Assumption:
       - pixel height in meters = height_m / height_px
-      - pixel area ~ (pixel_height_m)^2  (square pixels in rectilinear crop)
+      - pixel area ~ (pixel_height_m)^2  (square-ish pixels in rectilinear crop)
 
     Returns facade_area_m2
     """
@@ -186,12 +205,11 @@ def facade_area_from_pixels(total_facade_pixels, height_m, height_px):
 
     pixel_size_m = height_m / height_px
     pixel_area_m2 = pixel_size_m ** 2
-    return total_facade_pixels * pixel_area_m2
+    return float(total_facade_pixels) * pixel_area_m2
 
-
-# ------------------------------------------------------------
+# ============================================================
 # “DATABASE” BUILD: one row per (image_id, side)
-# ------------------------------------------------------------
+# ============================================================
 
 def build_result_table(stage1_csv) -> pd.DataFrame:
     """
@@ -255,7 +273,7 @@ def build_result_table(stage1_csv) -> pd.DataFrame:
                 continue
 
             # 2) Skip if image_id missing
-            if image_id is None or (image_id).strip() == "":
+            if image_id is None or str(image_id).strip() == "":
                 rec["status"] = "skip_no_image_id"
                 if not WRITE_FAIL_ROWS:
                     continue
@@ -271,9 +289,8 @@ def build_result_table(stage1_csv) -> pd.DataFrame:
 
                 top_part, bottom_part, height_px, height_m, facade_pixels = metrics_from_mask(
                     mask=mask,
-                    dist_m=dist_m,
+                    dist_m=float(dist_m),
                     vfov_deg=VFOV_DEG,
-                    img_h_px=IMG_H_PX,
                     band_frac=BAND_FRAC,
                     thresh=128,
                     min_row_frac=MIN_ROW_FRAC
@@ -285,9 +302,9 @@ def build_result_table(stage1_csv) -> pd.DataFrame:
                     "top_part_px": top_part,
                     "bottom_part_px": bottom_part,
                     "height_px": height_px,
-                    "height_m": height_m,
-                    "facade_pixels": facade_pixels,
-                    "facade_area_m2": area_m2,
+                    "height_m": float(height_m),
+                    "facade_pixels": int(facade_pixels),
+                    "facade_area_m2": float(area_m2),
                     "status": "ok",
                     "error": "",
                 })
@@ -302,9 +319,10 @@ def build_result_table(stage1_csv) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
+# ============================================================
+# MAIN
+# ============================================================
 
-
-### ==== MAIN ==== ###
 if __name__ == "__main__":
     out = build_result_table(STAGE1_CSV)
     out.to_csv(STAGE4_CSV, index=False)

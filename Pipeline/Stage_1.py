@@ -33,7 +33,7 @@ from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Case study area
-NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Neighbourhood_bounds.gpkg"
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Demo_bounds.gpkg"
 NEIGH_LAYER = None
 
 # BAG datafile 

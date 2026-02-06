@@ -27,12 +27,13 @@ LEFT_DIR  = IMAGE_PATHS["left_facades"]
 RIGHT_DIR = IMAGE_PATHS["right_facades"]
 
 # Perspective crop settings
-FOV_DEG = 90     # field of view in degrees
+HFOV_DEG = 96.4
+VFOV_DEG = 90     # field of view in degrees
 OUT_W = 800      # output width in pixels
 OUT_H = 600      # output height in pixels
 
 # If False: do not re-download / re-process if outputs already exist
-OVERWRITE = False
+OVERWRITE = True
 
 # Make sure folders exist
 for d in [RAW_DIR, ROT_DIR, LEFT_DIR, RIGHT_DIR]:
@@ -68,7 +69,7 @@ def get_thumb_url(image_id, access_token):
     return url
 
 
-def download_pano(image_id, access_token, out_dir, overwrite=False):
+def download_pano(image_id, access_token, out_dir, overwrite=OVERWRITE):
     """
     Download pano JPG to raw_pano_images/<image_id>.jpg
     """
@@ -93,72 +94,77 @@ def download_pano(image_id, access_token, out_dir, overwrite=False):
 # PANORAMA -> ROTATED + LEFT/RIGHT PERSPECTIVE CROPS
 # ============================================================
 
-def cyl_to_perspective(cyl_img, fov_deg=60, yaw_deg=0, pitch_deg=0,
-                       out_w=800, out_h=600):
+def equi_to_perspective(equi_img,
+                        hfov_deg=HFOV_DEG, vfov_deg=VFOV_DEG,
+                        yaw_deg=0, pitch_deg=0,
+                        out_w=OUT_W, out_h=OUT_H):
     """
-    Convert a cylindrical pano image into a rectilinear perspective view.
-
-    Notes:
-    - yaw_deg: horizontal view direction
-      * -90 = looking left
-      * +90 = looking right
-    - pitch_deg: vertical tilt (you keep it 0 for now)
+    Equirectangular pano -> rectilinear perspective.
+    hfov_deg: horizontal FOV of the output camera
+    vfov_deg: vertical FOV (optional). If None, derived from hfov + aspect.
+    yaw_deg:   left/right (deg)
+    pitch_deg: up/down (deg)
     """
-    H, W = cyl_img.shape[:2]
+    H, W = equi_img.shape[:2]
 
-    fov = np.deg2rad(fov_deg)
+    hfov = np.deg2rad(hfov_deg)
     yaw = np.deg2rad(yaw_deg)
     pitch = np.deg2rad(pitch_deg)
 
-    # Effective focal length in pixel units for the output rectilinear image
-    fx = (out_w / 2) / math.tan(fov / 2)
-    fy = fx
+    if vfov_deg is None:
+        # derive VFOV from HFOV and aspect ratio
+        vfov = 2 * np.arctan((out_h / out_w) * np.tan(hfov / 2))
+    else:
+        vfov = np.deg2rad(vfov_deg)
 
-    # Cylindrical "focal" in pixels (maps vertical angle to pixel displacement)
-    f_cyl = W / (2 * math.pi)
+    # focal lengths for rectilinear camera
+    fx = (out_w / 2) / np.tan(hfov / 2)
+    fy = (out_h / 2) / np.tan(vfov / 2)
 
-    # Pixel grid in the output view
     u, v = np.meshgrid(np.arange(out_w), np.arange(out_h))
-
-    # Normalized camera rays (rectilinear camera model)
     x = (u - out_w / 2) / fx
-    y = (v - out_h / 2) / fy
+    y = -(v - out_h / 2) / fy
     z = np.ones_like(x)
 
-    # --- Apply pitch rotation (around X axis) ---
+    # Normalize ray directions
+    norm = np.sqrt(x*x + y*y + z*z)
+    x /= norm; y /= norm; z /= norm
+
+    # Pitch around X
     cos_p, sin_p = np.cos(pitch), np.sin(pitch)
     y2 = y * cos_p - z * sin_p
     z2 = y * sin_p + z * cos_p
     x2 = x
 
-    # --- Apply yaw rotation (around Y axis) ---
+    # Yaw around Y
     cos_y, sin_y = np.cos(yaw), np.sin(yaw)
     x3 = x2 * cos_y + z2 * sin_y
     z3 = -x2 * sin_y + z2 * cos_y
     y3 = y2
 
-    # Map 3D rays to cylindrical coordinates:
-    theta = np.arctan2(x3, z3)
-    h = y3 / np.sqrt(x3**2 + z3**2)
+    # Spherical angles
+    theta = np.arctan2(x3, z3)                         # [-pi, pi]
+    phi = np.arctan2(y3, np.sqrt(x3*x3 + z3*z3))       # [-pi/2, pi/2]
 
-    # Convert cylindrical coords to pixel coords in the pano
-    map_x = ((theta + np.pi) / (2 * np.pi) * W).astype(np.float32)
-    map_y = (h * f_cyl + H / 2).astype(np.float32)
+    # Map to equirectangular pixel coords
+    map_x = (theta + np.pi) / (2 * np.pi) * W
+    map_y = (np.pi/2 - phi) / np.pi * H
 
-    # Sample pixels from pano into perspective image
-    persp = cv2.remap(
-        cyl_img, map_x, map_y,
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT
-    )
+    map_x = map_x.astype(np.float32)
+    map_y = map_y.astype(np.float32)
+
+    persp = cv2.remap(equi_img, map_x, map_y,
+                      interpolation=cv2.INTER_LINEAR,
+                      borderMode=cv2.BORDER_CONSTANT)
     return persp
+
 
 
 def process_image(raw_path, road_angle,
                   rot_dir, left_dir, right_dir,
                   do_rotate=True,
-                  fov_deg=90, out_w=800, out_h=600,
-                  overwrite=False):
+                  vfov_deg=VFOV_DEG, hfov_deg=HFOV_DEG, out_w=OUT_W, out_h=OUT_H,
+                  overwrite=OVERWRITE):
     """
     This is your "data processing stage" after downloading:
       1) read pano (raw_path)
@@ -179,6 +185,9 @@ def process_image(raw_path, road_angle,
         return left_path, right_path, rotated_path
 
     pano = cv2.imread(raw_path)
+    H, W = pano.shape[:2]
+    print(f"[PANO] {raw_path} size = {W}x{H}  ratio W/H={W/H:.3f}")
+
     if pano is None:
         raise FileNotFoundError(f"Could not read pano: {raw_path}")
 
@@ -203,19 +212,32 @@ def process_image(raw_path, road_angle,
     # 2) LEFT + RIGHT VIEWS
     # -------------------------
     # LEFT façade (yaw -90)
-    left_np = cyl_to_perspective(
-        pano_rot, fov_deg=fov_deg, yaw_deg=-90, pitch_deg=0,
-        out_w=out_w, out_h=out_h
-    )
+    left_np = equi_to_perspective(
+    pano_rot,
+    hfov_deg=HFOV_DEG,
+    vfov_deg=VFOV_DEG, 
+    yaw_deg=-90,
+    pitch_deg=0,
+    out_w=OUT_W,
+    out_h=OUT_H
+)
+
+
     left_img = Image.fromarray(cv2.cvtColor(left_np, cv2.COLOR_BGR2RGB))
     if overwrite or (not os.path.exists(left_path)):
         left_img.save(left_path)
 
     # RIGHT façade (yaw +90)
-    right_np = cyl_to_perspective(
-        pano_rot, fov_deg=fov_deg, yaw_deg=90, pitch_deg=0,
-        out_w=out_w, out_h=out_h
-    )
+    right_np = equi_to_perspective(
+    pano_rot,
+    hfov_deg=96.4,
+    vfov_deg=90,   # keep the old VFOV
+    yaw_deg=90,
+    pitch_deg=0,
+    out_w=OUT_W,
+    out_h=OUT_H
+)
+
     right_img = Image.fromarray(cv2.cvtColor(right_np, cv2.COLOR_BGR2RGB))
     if overwrite or (not os.path.exists(right_path)):
         right_img.save(right_path)
@@ -271,7 +293,8 @@ def download_images(input_csv, image_id_col="image_id"):
                 left_dir=LEFT_DIR,
                 right_dir=RIGHT_DIR,
                 do_rotate=True,
-                fov_deg=FOV_DEG,
+                vfov_deg=VFOV_DEG,
+                hfov_deg=HFOV_DEG,
                 out_w=OUT_W,
                 out_h=OUT_H,
             )
