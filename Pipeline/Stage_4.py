@@ -12,8 +12,7 @@ from Stage_0 import CSV_PATHS, IMAGE_PATHS
 # CONFIGURATION
 # ============================================================
 
-BAND_FRAC = 0.8         # fraction of image width to keep in center band for vertical extent detection
-MIN_ROW_FRAC = 0.05     # minimum fraction of row pixels to consider row as facade (default 6%)
+MIN_ROW_FRAC = 0.06     # minimum fraction of row pixels to consider row as facade (default 6%)
 
 # IMPORTANT:
 # VFOV_DEG must match the VFOV used in Stage 2 when generating the perspective crops.
@@ -69,22 +68,6 @@ def save_overlay(image_path, mask, out_path, rgba=(0, 255, 0, 110), thresh=128):
 # ============================================================
 # CORE PROCESSING
 # ============================================================
-
-def keep_center_band(mask, frac=BAND_FRAC):
-    """
-    Keep only the center vertical band of the mask to reduce edge distortions.
-    frac=0.6 keeps the central 60% of width.
-    """
-    h, w = mask.shape
-    x0 = int(w * (0.5 - frac / 2.0))
-    x1 = int(w * (0.5 + frac / 2.0))
-
-    out = mask.copy()
-    out[:, :x0] = 0
-    out[:, x1:] = 0
-    return out
-
-
 def count_mask_pixels(mask, thresh=128):
     """
     Counts number of pixels classified as facade (mask pixels with value > 128 are seen as facade).
@@ -156,12 +139,12 @@ def height_from_parts_pinhole(top_part_px, bottom_part_px, dist_m, vfov_deg, img
 
 def metrics_from_mask(mask: np.ndarray, dist_m,
                       vfov_deg=VFOV_DEG,
-                      band_frac=BAND_FRAC, thresh=128,
+                      thresh=128,
                       min_row_frac=MIN_ROW_FRAC):
     """
     One-call metric extraction:
       - total facade pixels (full mask)
-      - vertical extents (center band)
+      - vertical extents
       - height_px and height_m
 
     IMPORTANT CHANGE:
@@ -175,8 +158,7 @@ def metrics_from_mask(mask: np.ndarray, dist_m,
 
     total_facade_pixels = count_mask_pixels(mask, thresh=thresh)
 
-    band = keep_center_band(mask, frac=band_frac)
-    top_part_px, bottom_part_px = detect_vertical_extents(band, thresh=thresh, min_row_frac=min_row_frac)
+    top_part_px, bottom_part_px = detect_vertical_extents(mask, thresh=thresh, min_row_frac=min_row_frac)
 
     height_px = top_part_px + bottom_part_px
     height_m = height_from_parts_pinhole(
@@ -291,7 +273,6 @@ def build_result_table(stage1_csv) -> pd.DataFrame:
                     mask=mask,
                     dist_m=float(dist_m),
                     vfov_deg=VFOV_DEG,
-                    band_frac=BAND_FRAC,
                     thresh=128,
                     min_row_frac=MIN_ROW_FRAC
                 )

@@ -229,6 +229,11 @@ def run_folder(in_dir, out_dir, sam, stage1_df=None, side=None):
         image_path = os.path.join(in_dir, fn)
         base = os.path.splitext(fn)[0]                      # e.g. "left_12345"
         mask_out = os.path.join(out_dir, f"{base}.png")     # Saves image in output_dir as.png
+        
+        # Skips segmentation if output mask already exists
+        if os.path.exists(mask_out):
+            print(f"[{i}/{len(files)}] SKIP: {fn} -> output exists ({os.path.basename(mask_out)})")
+            continue
 
         # ---------------------------------------------
         # Segmentation under special circumstances
