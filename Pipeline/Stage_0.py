@@ -30,7 +30,6 @@ IMAGE_FOLDERS = [
     "left_segs",
     "right_segs",
     "temp_segs",
-    "temp_center_bands",
 ]
 
 CSV_FOLDERS = [

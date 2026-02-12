@@ -17,7 +17,7 @@ Stage1["FID"] = Stage1["FID"].astype(str)
 Stage4["FID"] = Stage4["FID"].astype(str)
 
 # keep only what you need from sample points layers
-sp_key = Stage1[["FID", "xcoord", "ycoord"]]
+sp_key = Stage1[["FID", "xcoord", "ycoord", "dist_left_m", "dist_right_m"]]
 
 # one-to-many join: every facade row gets x/y
 joined = Stage4.merge(sp_key, on="FID", how="left", validate="many_to_one")
