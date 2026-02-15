@@ -33,7 +33,7 @@ OUT_W = 800      # output width in pixels
 OUT_H = 600      # output height in pixels
 
 # If False: do not re-download / re-process if outputs already exist
-OVERWRITE = True
+OVERWRITE = False
 
 # Make sure folders exist
 for d in [RAW_DIR, ROT_DIR, LEFT_DIR, RIGHT_DIR]:

@@ -12,7 +12,7 @@ import pandas as pd
 import osmnx as ox
 import mercantile
 import matplotlib
-matplotlib.use("Agg")  # <- IMPORTANT: no Tkinter
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,7 +33,7 @@ from Stage_0 import PROJECT_ROOT, CSV_PATHS, MAPILLARY_TOKEN
 ACCESS_TOKEN = MAPILLARY_TOKEN
 
 # Case study area
-NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Demo_bounds.gpkg"
+NEIGH_FILE = PROJECT_ROOT / "Input_data" / "Amsterdam.gpkg"
 NEIGH_LAYER = None
 
 # BAG datafile 
@@ -41,7 +41,7 @@ BUILDINGS_FILE = PROJECT_ROOT / "Input_data" / "Buildings.gpkg"
 BUILDINGS_LAYER = None
 
 # If chosen for manual point input
-POINTS_MANUAL = PROJECT_ROOT / "Input_data" / "Manual_points.gpkg"
+POINTS_MANUAL = PROJECT_ROOT / "Input_data" / "SVI_test_locations.gpkg"
 POINTS_MANUAL_LAYER = None
 
 # Output .csv 
@@ -73,7 +73,7 @@ BUILDING_SEARCH_DIST_M = 20     # candidate building search radius (bbox prefilt
 MAX_FACADE_DIST_M = 20          # if distance is farther, it is set to 0.0 (parameter found through iterative testing)
 
 # "auto" or "manual" to toggle between manual point insertion or automatic point creation
-SAMPLING_MODE = "auto"  
+SAMPLING_MODE = "manual"  
 
 # Creates a map of the output road network + sampling points
 PLOT_MAP = True
@@ -117,6 +117,7 @@ def load_boundaries(path, layer=None):
         raise ValueError("Neighbourhood polygon has no CRS.")
 
     # Union/dissolve all features into one geometry (instead of taking iloc[0])
+    # --> this makes the sample points spread evenly across the whole area instead of just one feature
     poly = gdf.geometry.union_all()
 
     poly_4326 = gpd.GeoSeries([poly], crs=gdf.crs).to_crs(CRS_WGS84).iloc[0]
@@ -166,7 +167,7 @@ def plot_roads_and_points(edges_metric, points_wgs84, boundary_4326=None, inter_
     fig, ax = plt.subplots(figsize=(12, 12))
 
     # --------------------
-    # NEW: plot boundary
+    # Plots boundary of study area
     # --------------------
     if boundary_4326 is not None:
         boundary_m = gpd.GeoSeries([boundary_4326], crs=CRS_WGS84).to_crs(CRS_METRIC)
